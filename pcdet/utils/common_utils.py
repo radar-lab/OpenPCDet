@@ -269,7 +269,7 @@ def scatter_point_inds(indices, point_inds, shape):
     ret = -1 * torch.ones(*shape, dtype=point_inds.dtype, device=point_inds.device)
     ndim = indices.shape[-1]
     flattened_indices = indices.view(-1, ndim)
-    slices = [flattened_indices[:, i] for i in range(ndim)]
+    slices = tuple(flattened_indices[:, i] for i in range(ndim))
     ret[slices] = point_inds
     return ret
 
