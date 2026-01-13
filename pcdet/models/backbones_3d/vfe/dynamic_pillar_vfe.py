@@ -2,13 +2,60 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    import torch_scatter
-except Exception as e:
-    # Incase someone doesn't want to use dynamic pillar vfe and hasn't installed torch_scatter
-    pass
-
 from .vfe_template import VFETemplate
+
+
+def scatter_mean(src, index, dim=0):
+    """
+    Native PyTorch implementation of scatter_mean.
+    Args:
+        src: Source tensor
+        index: Index tensor for scattering
+        dim: Dimension along which to scatter (default: 0)
+    Returns:
+        Tensor with mean values scattered
+    """
+    # Get output size
+    index_expanded = index.unsqueeze(-1).expand_as(src)
+    out_size = list(src.shape)
+    out_size[dim] = int(index.max()) + 1
+    
+    # Sum values
+    out_sum = torch.zeros(out_size, dtype=src.dtype, device=src.device)
+    out_sum.scatter_add_(dim, index_expanded, src)
+    
+    # Count occurrences
+    ones = torch.ones_like(src)
+    count = torch.zeros(out_size, dtype=src.dtype, device=src.device)
+    count.scatter_add_(dim, index_expanded, ones)
+    
+    # Avoid division by zero
+    count = count.clamp(min=1)
+    return out_sum / count
+
+
+def scatter_max(src, index, dim=0):
+    """
+    Native PyTorch implementation of scatter_max.
+    Args:
+        src: Source tensor
+        index: Index tensor for scattering  
+        dim: Dimension along which to scatter (default: 0)
+    Returns:
+        Tuple of (max_values, argmax_indices)
+    """
+    index_expanded = index.unsqueeze(-1).expand_as(src)
+    out_size = list(src.shape)
+    out_size[dim] = int(index.max()) + 1
+    
+    # Initialize with very negative values
+    out = torch.full(out_size, float('-inf'), dtype=src.dtype, device=src.device)
+    out.scatter_reduce_(dim, index_expanded, src, reduce='amax', include_self=False)
+    
+    # Replace -inf with 0 for empty groups
+    out = torch.where(out == float('-inf'), torch.zeros_like(out), out)
+    
+    return out, None  # Return None for argmax to match torch_scatter interface
 
 
 class PFNLayerV2(nn.Module):
@@ -37,7 +84,7 @@ class PFNLayerV2(nn.Module):
         x = self.linear(inputs)
         x = self.norm(x) if self.use_norm else x
         x = self.relu(x)
-        x_max = torch_scatter.scatter_max(x, unq_inv, dim=0)[0]
+        x_max = scatter_max(x, unq_inv, dim=0)[0]
 
         if self.last_vfe:
             return x_max
@@ -102,7 +149,7 @@ class DynamicPillarVFE(VFETemplate):
         
         unq_coords, unq_inv, unq_cnt = torch.unique(merge_coords, return_inverse=True, return_counts=True, dim=0)
 
-        points_mean = torch_scatter.scatter_mean(points_xyz, unq_inv, dim=0)
+        points_mean = scatter_mean(points_xyz, unq_inv, dim=0)
         f_cluster = points_xyz - points_mean[unq_inv, :]
 
         f_center = torch.zeros_like(points_xyz)
@@ -123,10 +170,10 @@ class DynamicPillarVFE(VFETemplate):
         for pfn in self.pfn_layers:
             features = pfn(features, unq_inv)
         # features = self.linear1(features)
-        # features_max = torch_scatter.scatter_max(features, unq_inv, dim=0)[0]
+        # features_max = scatter_max(features, unq_inv, dim=0)[0]
         # features = torch.cat([features, features_max[unq_inv, :]], dim=1)
         # features = self.linear2(features)
-        # features = torch_scatter.scatter_max(features, unq_inv, dim=0)[0]
+        # features = scatter_max(features, unq_inv, dim=0)[0]
         
         # generate voxel coordinates
         unq_coords = unq_coords.int()

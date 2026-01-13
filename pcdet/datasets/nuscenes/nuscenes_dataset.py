@@ -15,7 +15,10 @@ from PIL import Image
 class NuScenesDataset(DatasetTemplate):
     def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None):
         base_path = root_path if root_path is not None else dataset_cfg.DATA_PATH
-        root_path = _expand_path(base_path) / dataset_cfg.VERSION
+        # NOTE: Do NOT append VERSION to root_path as:
+        # 1. NuScenes data samples/sweeps are typically at NUSCENES_ROOT level
+        # 2. Info files and lidar_path are relative to NUSCENES_ROOT
+        root_path = _expand_path(base_path)
         super().__init__(
             dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
         )
@@ -359,8 +362,10 @@ def create_nuscenes_info(version, data_path, save_path, max_sweeps=10, with_cam=
     from nuscenes.nuscenes import NuScenes
     from nuscenes.utils import splits
     from . import nuscenes_utils
-    data_path = data_path / version
-    save_path = save_path / version
+    # NOTE: NuScenes library appends version to dataroot internally,
+    # so we should NOT append version to data_path here.
+    # save_path should also be data_path directly since NuScenesDataset
+    # expects info files at root_path level (not root_path/version).
 
     assert version in ['v1.0-trainval', 'v1.0-test', 'v1.0-mini']
     if version == 'v1.0-trainval':
@@ -405,6 +410,7 @@ def create_nuscenes_info(version, data_path, save_path, max_sweeps=10, with_cam=
 if __name__ == '__main__':
     import yaml
     import argparse
+    import os
     from pathlib import Path
     from easydict import EasyDict
 
@@ -413,23 +419,35 @@ if __name__ == '__main__':
     parser.add_argument('--func', type=str, default='create_nuscenes_infos', help='')
     parser.add_argument('--version', type=str, default='v1.0-trainval', help='')
     parser.add_argument('--with_cam', action='store_true', default=False, help='use camera or not')
+    parser.add_argument('--data_path', type=str, default=None, help='specify the data path (overrides NUSCENES_ROOT env var)')
     args = parser.parse_args()
 
     if args.func == 'create_nuscenes_infos':
         dataset_cfg = EasyDict(yaml.safe_load(open(args.cfg_file)))
         ROOT_DIR = (Path(__file__).resolve().parent / '../../../').resolve()
         dataset_cfg.VERSION = args.version
+        
+        # Determine data path: CLI arg > env var > default
+        if args.data_path:
+            data_path = Path(args.data_path)
+        elif os.environ.get('NUSCENES_ROOT'):
+            data_path = Path(os.environ['NUSCENES_ROOT'])
+        else:
+            data_path = ROOT_DIR / 'data' / 'nuscenes'
+        
+        print(f'Using NuScenes data path: {data_path}')
+        
         create_nuscenes_info(
             version=dataset_cfg.VERSION,
-            data_path=ROOT_DIR / 'data' / 'nuscenes',
-            save_path=ROOT_DIR / 'data' / 'nuscenes',
+            data_path=data_path,
+            save_path=data_path,
             max_sweeps=dataset_cfg.MAX_SWEEPS,
             with_cam=args.with_cam
         )
 
         nuscenes_dataset = NuScenesDataset(
             dataset_cfg=dataset_cfg, class_names=None,
-            root_path=ROOT_DIR / 'data' / 'nuscenes',
+            root_path=data_path,
             logger=common_utils.create_logger(), training=True
         )
         nuscenes_dataset.create_groundtruth_database(max_sweeps=dataset_cfg.MAX_SWEEPS)
