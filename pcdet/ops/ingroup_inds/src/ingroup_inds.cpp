@@ -2,6 +2,7 @@
 #include <torch/extension.h>
 #include <torch/serialize/tensor.h>
 #include <vector>
+#include <cstdint>
 
 #define CHECK_CUDA(x) \
   TORCH_CHECK(x.device().is_cuda(), #x, " must be a CUDAtensor ")
@@ -13,8 +14,8 @@
 
 
 void ingroup_inds_launcher(
-    const long *group_inds_data,
-    long *out_inds_data,
+    const int64_t *group_inds_data,
+    int64_t *out_inds_data,
     int N,
     int max_group_id
 );
@@ -36,8 +37,8 @@ void ingroup_inds_gpu(
   int max_group_id = group_inds.max().item().toLong();
 
 
-  long *group_inds_data = group_inds.data_ptr<long>();
-  long *out_inds_data = out_inds.data_ptr<long>();
+  int64_t *group_inds_data = group_inds.data_ptr<int64_t>();
+  int64_t *out_inds_data = out_inds.data_ptr<int64_t>();
 
   ingroup_inds_launcher(
       group_inds_data,

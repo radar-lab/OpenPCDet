@@ -1,4 +1,5 @@
 from collections import defaultdict
+import os
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,13 @@ from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
 
 
+def _expand_path(path_value):
+    expanded = os.path.expandvars(str(path_value))
+    for key, value in os.environ.items():
+        expanded = expanded.replace(f'${{{key}}}', value).replace(f'${key}', value)
+    return Path(expanded).expanduser()
+
+
 class DatasetTemplate(torch_data.Dataset):
     def __init__(self, dataset_cfg=None, class_names=None, training=True, root_path=None, logger=None):
         super().__init__()
@@ -18,7 +26,8 @@ class DatasetTemplate(torch_data.Dataset):
         self.training = training
         self.class_names = class_names
         self.logger = logger
-        self.root_path = root_path if root_path is not None else Path(self.dataset_cfg.DATA_PATH)
+        base_path = root_path if root_path is not None else self.dataset_cfg.DATA_PATH
+        self.root_path = _expand_path(base_path)
         self.logger = logger
         if self.dataset_cfg is None or class_names is None:
             return

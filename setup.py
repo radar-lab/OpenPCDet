@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 from setuptools import find_packages, setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
@@ -44,9 +45,8 @@ if __name__ == '__main__':
             'pyyaml',
             'scikit-image',
             'tqdm',
-            'SharedArray',
             # 'spconv',  # spconv has different names depending on the cuda version
-        ],
+        ] + (['SharedArray'] if sys.platform != 'win32' else []),
 
         author='Shaoshuai Shi',
         author_email='shaoshuaics@gmail.com',

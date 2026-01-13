@@ -27,31 +27,32 @@ All Rights Reserved 2020.
 } while (0)
 #define CHECK_INPUT(x) CHECK_CUDA(x);CHECK_CONTIGUOUS(x)
 
-inline float min(float a, float b){
+// Use anonymous namespace to avoid linker conflicts with iou3d_nms_kernel.cu
+namespace {
+
+inline float min_f(float a, float b){
     return a > b ? b : a;
 }
 
-inline float max(float a, float b){
+inline float max_f(float a, float b){
     return a > b ? a : b;
 }
 
 const float EPS = 1e-8;
 struct Point {
     float x, y;
-    __device__ Point() {}
-    __device__ Point(double _x, double _y){
-        x = _x, y = _y;
-    }
+    Point() : x(0), y(0) {}
+    Point(double _x, double _y) : x(static_cast<float>(_x)), y(static_cast<float>(_y)) {}
 
-    __device__ void set(float _x, float _y){
+    void set(float _x, float _y){
         x = _x; y = _y;
     }
 
-    __device__ Point operator +(const Point &b)const{
+    Point operator +(const Point &b)const{
         return Point(x + b.x, y + b.y);
     }
 
-    __device__ Point operator -(const Point &b)const{
+    Point operator -(const Point &b)const{
         return Point(x - b.x, y - b.y);
     }
 };
@@ -65,10 +66,10 @@ inline float cross(const Point &p1, const Point &p2, const Point &p0){
 }
 
 inline int check_rect_cross(const Point &p1, const Point &p2, const Point &q1, const Point &q2){
-    int ret = min(p1.x,p2.x) <= max(q1.x,q2.x)  &&
-              min(q1.x,q2.x) <= max(p1.x,p2.x) &&
-              min(p1.y,p2.y) <= max(q1.y,q2.y) &&
-              min(q1.y,q2.y) <= max(p1.y,p2.y);
+    int ret = min_f(p1.x,p2.x) <= max_f(q1.x,q2.x)  &&
+              min_f(q1.x,q2.x) <= max_f(p1.x,p2.x) &&
+              min_f(p1.y,p2.y) <= max_f(q1.y,q2.y) &&
+              min_f(q1.y,q2.y) <= max_f(p1.y,p2.y);
     return ret;
 }
 
@@ -227,6 +228,8 @@ inline float iou_bev(const float *box_a, const float *box_b){
     float s_overlap = box_overlap(box_a, box_b);
     return s_overlap / fmaxf(sa + sb - s_overlap, EPS);
 }
+
+} // end anonymous namespace
 
 
 int boxes_iou_bev_cpu(at::Tensor boxes_a_tensor, at::Tensor boxes_b_tensor, at::Tensor ans_iou_tensor){

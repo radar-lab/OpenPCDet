@@ -9,7 +9,15 @@ import copy
 import numpy as np
 import torch
 import multiprocessing
-import SharedArray
+
+# SharedArray is not available on Windows
+try:
+    import SharedArray
+    HAS_SHARED_ARRAY = True
+except ImportError:
+    SharedArray = None
+    HAS_SHARED_ARRAY = False
+
 import torch.distributed as dist
 from tqdm import tqdm
 from pathlib import Path

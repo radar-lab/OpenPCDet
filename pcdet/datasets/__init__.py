@@ -6,26 +6,53 @@ from torch.utils.data import DistributedSampler as _DistributedSampler
 from pcdet.utils import common_utils
 
 from .dataset import DatasetTemplate
-from .kitti.kitti_dataset import KittiDataset
-from .nuscenes.nuscenes_dataset import NuScenesDataset
-from .waymo.waymo_dataset import WaymoDataset
-from .pandaset.pandaset_dataset import PandasetDataset
-from .lyft.lyft_dataset import LyftDataset
-from .once.once_dataset import ONCEDataset
-from .argo2.argo2_dataset import Argo2Dataset
-from .custom.custom_dataset import CustomDataset
 
-__all__ = {
-    'DatasetTemplate': DatasetTemplate,
-    'KittiDataset': KittiDataset,
-    'NuScenesDataset': NuScenesDataset,
-    'WaymoDataset': WaymoDataset,
-    'PandasetDataset': PandasetDataset,
-    'LyftDataset': LyftDataset,
-    'ONCEDataset': ONCEDataset,
-    'CustomDataset': CustomDataset,
-    'Argo2Dataset': Argo2Dataset
-}
+# Lazy imports for datasets to avoid importing optional dependencies
+# Only import datasets that are actually used
+
+def _get_dataset_class(name):
+    """Lazy import of dataset classes to avoid missing optional dependencies."""
+    if name == 'DatasetTemplate':
+        return DatasetTemplate
+    elif name == 'KittiDataset':
+        from .kitti.kitti_dataset import KittiDataset
+        return KittiDataset
+    elif name == 'NuScenesDataset':
+        from .nuscenes.nuscenes_dataset import NuScenesDataset
+        return NuScenesDataset
+    elif name == 'WaymoDataset':
+        from .waymo.waymo_dataset import WaymoDataset
+        return WaymoDataset
+    elif name == 'PandasetDataset':
+        from .pandaset.pandaset_dataset import PandasetDataset
+        return PandasetDataset
+    elif name == 'LyftDataset':
+        from .lyft.lyft_dataset import LyftDataset
+        return LyftDataset
+    elif name == 'ONCEDataset':
+        from .once.once_dataset import ONCEDataset
+        return ONCEDataset
+    elif name == 'Argo2Dataset':
+        from .argo2.argo2_dataset import Argo2Dataset
+        return Argo2Dataset
+    elif name == 'CustomDataset':
+        from .custom.custom_dataset import CustomDataset
+        return CustomDataset
+    else:
+        raise ValueError(f"Unknown dataset: {name}")
+
+
+# For backward compatibility, provide a dict-like interface
+class _DatasetRegistry:
+    def __getitem__(self, name):
+        return _get_dataset_class(name)
+    
+    def __contains__(self, name):
+        return name in ['DatasetTemplate', 'KittiDataset', 'NuScenesDataset', 
+                        'WaymoDataset', 'PandasetDataset', 'LyftDataset', 
+                        'ONCEDataset', 'Argo2Dataset', 'CustomDataset']
+
+__all__ = _DatasetRegistry()
 
 
 class DistributedSampler(_DistributedSampler):

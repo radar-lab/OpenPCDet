@@ -4,7 +4,17 @@ import pickle
 import random
 import shutil
 import subprocess
-import SharedArray
+import sys
+
+# SharedArray is not available on Windows
+try:
+    import SharedArray
+    HAS_SHARED_ARRAY = True
+except ImportError:
+    SharedArray = None
+    HAS_SHARED_ARRAY = False
+    if sys.platform != 'win32':
+        logging.warning("SharedArray not found. Some features may not work.")
 
 import numpy as np
 import torch
@@ -276,6 +286,9 @@ def generate_voxel2pinds(sparse_tensor):
 
 
 def sa_create(name, var):
+    if not HAS_SHARED_ARRAY:
+        raise RuntimeError("SharedArray is not available on Windows. "
+                           "This function requires SharedArray which is Linux-only.")
     x = SharedArray.create(name, var.shape, dtype=var.dtype)
     x[...] = var[...]
     x.flags.writeable = False

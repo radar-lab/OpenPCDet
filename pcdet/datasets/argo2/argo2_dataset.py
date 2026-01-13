@@ -4,7 +4,15 @@ import argparse
 import os
 from os import path as osp
 import torch
-from av2.utils.io import read_feather
+
+# av2 is optional - only needed for Argoverse2 dataset
+try:
+    from av2.utils.io import read_feather
+    HAS_AV2 = True
+except ImportError:
+    read_feather = None
+    HAS_AV2 = False
+
 import numpy as np
 import multiprocessing as mp
 import pickle as pkl

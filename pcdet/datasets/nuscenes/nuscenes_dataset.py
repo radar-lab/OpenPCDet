@@ -7,14 +7,15 @@ from tqdm import tqdm
 
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...utils import common_utils
-from ..dataset import DatasetTemplate
+from ..dataset import DatasetTemplate, _expand_path
 from pyquaternion import Quaternion
 from PIL import Image
 
 
 class NuScenesDataset(DatasetTemplate):
     def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None):
-        root_path = (root_path if root_path is not None else Path(dataset_cfg.DATA_PATH)) / dataset_cfg.VERSION
+        base_path = root_path if root_path is not None else dataset_cfg.DATA_PATH
+        root_path = _expand_path(base_path) / dataset_cfg.VERSION
         super().__init__(
             dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
         )
