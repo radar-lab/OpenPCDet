@@ -308,7 +308,7 @@ class DatasetTemplate(torch_data.Dataset):
 
                         images.append(image_pad)
                     ret[key] = np.stack(images, axis=0)
-                elif key in ['calib']:
+                elif key in ['calib', 'img_process_infos', 'image_paths']:
                     ret[key] = val
                 elif key in ["points_2d"]:
                     max_len = max([len(_val) for _val in val])
@@ -326,8 +326,11 @@ class DatasetTemplate(torch_data.Dataset):
                     ret[key] = torch.stack([torch.stack(imgs,dim=0) for imgs in val],dim=0)
                 else:
                     ret[key] = np.stack(val, axis=0)
-            except:
-                print('Error in collate_batch: key=%s' % key)
+            except Exception as e:
+                print('Error in collate_batch: key=%s, error=%s' % (key, str(e)))
+                print('val type=%s, len=%s' % (type(val), len(val) if hasattr(val, '__len__') else 'N/A'))
+                if len(val) > 0:
+                    print('val[0] type=%s, shape=%s' % (type(val[0]), val[0].shape if hasattr(val[0], 'shape') else 'N/A'))
                 raise TypeError
 
         ret['batch_size'] = batch_size * batch_size_ratio

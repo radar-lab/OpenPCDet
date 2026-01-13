@@ -199,6 +199,14 @@ class NuScenesDataset(DatasetTemplate):
             camera2lidar[:3, :3] = camera_info["sensor2lidar_rotation"]
             camera2lidar[:3, 3] = camera_info["sensor2lidar_translation"]
             input_dict["camera2lidar"].append(camera2lidar)
+        
+        # Stack camera transform matrices into numpy arrays for batch collation
+        input_dict["lidar2camera"] = np.stack(input_dict["lidar2camera"], axis=0)
+        input_dict["lidar2image"] = np.stack(input_dict["lidar2image"], axis=0)
+        input_dict["camera2ego"] = np.stack(input_dict["camera2ego"], axis=0)
+        input_dict["camera_intrinsics"] = np.stack(input_dict["camera_intrinsics"], axis=0)
+        input_dict["camera2lidar"] = np.stack(input_dict["camera2lidar"], axis=0)
+        
         # read image
         filename = input_dict["image_paths"]
         images = []

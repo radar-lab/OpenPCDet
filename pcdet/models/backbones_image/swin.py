@@ -656,6 +656,12 @@ class SwinTransformer(nn.Module):
                                                   f'specify `Pretrained` in ' \
                                                   f'`init_cfg` in ' \
                                                   f'{self.__class__.__name__} '
+            # Skip loading pretrained weights if file doesn't exist (will be loaded from model checkpoint)
+            import os
+            if not os.path.exists(self.init_cfg.checkpoint):
+                print(f'Pretrained weights {self.init_cfg.checkpoint} not found, '
+                      f'skipping (weights will be loaded from model checkpoint)')
+                return
             ckpt = torch.load(self.init_cfg.checkpoint, map_location='cpu')
             if 'state_dict' in ckpt:
                 _state_dict = ckpt['state_dict']
