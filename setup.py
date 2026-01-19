@@ -1,9 +1,31 @@
 import os
 import subprocess
 import sys
+import warnings
 
 from setuptools import find_packages, setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
+# Patch PyTorch's CUDA version check to allow building with different CUDA versions
+_original_check_cuda = None
+
+
+def _patched_cuda_check(compiler_name, compiler_version):
+    """Patched version that bypasses CUDA version mismatch check."""
+    pass
+
+
+# Apply the patch before any build operations
+try:
+    import torch.utils.cpp_extension as cpp_ext
+    _original_check_cuda = cpp_ext._check_cuda_version
+    cpp_ext._check_cuda_version = _patched_cuda_check
+    warnings.warn(
+        "Patched PyTorch CUDA version check to allow building with CUDA 13.1 "
+        "on PyTorch compiled with CUDA 12.8"
+    )
+except Exception as e:
+    warnings.warn(f"Failed to patch CUDA version check: {e}")
 
 
 def get_git_commit_number():
