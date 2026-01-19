@@ -48,9 +48,20 @@ def cfg_from_list(cfg_list, config):
             d[subkey] = value
 
 
-def merge_new_config(config, new_config):
+def merge_new_config(config, new_config, base_dir=None):
     if '_BASE_CONFIG_' in new_config:
-        with open(new_config['_BASE_CONFIG_'], 'r') as f:
+        base_config_path = Path(new_config['_BASE_CONFIG_'])
+        # Resolve _BASE_CONFIG_ relative to the original config file's directory
+        # Only join if base_config_path is NOT already absolute and NOT project-root relative (starts with src/, data/, etc.)
+        if base_dir is not None and not base_config_path.is_absolute():
+            # Check if path looks like project-root relative (starts with known project directories)
+            if base_config_path.parts[0] in ('src', 'data', 'vendors', 'tools', 'cfgs', 'pcdet'):
+                # Project-root relative path, resolve from cfg.PROJECT_ROOT
+                base_config_path = cfg.PROJECT_ROOT / base_config_path
+            else:
+                # Config-dir relative path, join with base_dir
+                base_config_path = base_dir / base_config_path
+        with open(base_config_path, 'r') as f:
             try:
                 yaml_config = yaml.safe_load(f, Loader=yaml.FullLoader)
             except:
@@ -63,23 +74,26 @@ def merge_new_config(config, new_config):
             continue
         if key not in config:
             config[key] = EasyDict()
-        merge_new_config(config[key], val)
+        merge_new_config(config[key], val, base_dir=base_dir)
 
     return config
 
 
 def cfg_from_yaml_file(cfg_file, config):
+    cfg_file = Path(cfg_file)
+    base_dir = cfg_file.parent
     with open(cfg_file, 'r') as f:
         try:
             new_config = yaml.safe_load(f, Loader=yaml.FullLoader)
         except:
             new_config = yaml.safe_load(f)
 
-        merge_new_config(config=config, new_config=new_config)
+        merge_new_config(config=config, new_config=new_config, base_dir=base_dir)
 
     return config
 
 
 cfg = EasyDict()
 cfg.ROOT_DIR = (Path(__file__).resolve().parent / '../').resolve()
+cfg.PROJECT_ROOT = cfg.ROOT_DIR.parent.parent  # Go up 2 levels: OpenPCDet -> vendors -> project root
 cfg.LOCAL_RANK = 0

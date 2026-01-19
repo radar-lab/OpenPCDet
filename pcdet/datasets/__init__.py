@@ -38,6 +38,9 @@ def _get_dataset_class(name):
     elif name == 'CustomDataset':
         from .custom.custom_dataset import CustomDataset
         return CustomDataset
+    elif name == 'A9Dataset':
+        from .a9.a9_dataset import A9Dataset
+        return A9Dataset
     else:
         raise ValueError(f"Unknown dataset: {name}")
 
@@ -48,9 +51,9 @@ class _DatasetRegistry:
         return _get_dataset_class(name)
     
     def __contains__(self, name):
-        return name in ['DatasetTemplate', 'KittiDataset', 'NuScenesDataset', 
-                        'WaymoDataset', 'PandasetDataset', 'LyftDataset', 
-                        'ONCEDataset', 'Argo2Dataset', 'CustomDataset']
+        return name in ['DatasetTemplate', 'KittiDataset', 'NuScenesDataset',
+                        'WaymoDataset', 'PandasetDataset', 'LyftDataset',
+                        'ONCEDataset', 'Argo2Dataset', 'CustomDataset', 'A9Dataset']
 
 __all__ = _DatasetRegistry()
 
