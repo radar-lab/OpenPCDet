@@ -72,13 +72,50 @@ class A9Dataset(DatasetTemplate):
         self.logger.info(f'Total samples for A9 dataset ({mode}): {len(a9_infos)}')
 
     def get_lidar(self, idx):
-        """Load point cloud data from pickle file."""
-        lidar_file = Path(self.a9_infos[idx]['lidar_path'])
+        """Load point cloud data from binary file.
+
+        Handles variable point cloud formats by trying different reshape options.
+        Binary files are expected to be in KITTI format: (N, 4) with x, y, z, intensity.
+        For OpenPCDet with timestamp feature, we pad to 5 features (x, y, z, intensity, timestamp).
+        """
+        lidar_file = Path(self.a9_infos[idx]['point_cloud_path'])
         if not lidar_file.is_absolute():
             lidar_file = self.root_path / lidar_file
 
         with open(lidar_file, 'rb') as f:
-            points = pickle.load(f)
+            points = np.fromfile(f, dtype=np.float32)
+
+        # Try to reshape to common formats
+        total_points = points.size
+
+        # Try common formats (4 for KITTI, 5 for OpenPCDet with timestamp)
+        for num_features in [4, 5, 3, 6]:
+            if total_points % num_features == 0:
+                points = points.reshape(-1, num_features)
+                logger = getattr(self, 'logger', None)
+                if logger:
+                    logger.debug(f'Loaded point cloud with {total_points // num_features} points, {num_features} features')
+                break
+        else:
+            # If no standard format works, truncate to nearest divisible by 5
+            # and pad if needed to ensure at least 5 features
+            valid_points = (total_points // 5) * 5
+            points = points[:valid_points]
+            points = points.reshape(-1, 5)
+            logger = getattr(self, 'logger', None)
+            if logger:
+                logger.warning(f'Point cloud file has irregular size {total_points}. '
+                               f'Truncated to {valid_points} values and reshaped to (N, 5)')
+
+        # Ensure we have exactly 5 features (x, y, z, intensity, timestamp) for OpenPCDet compatibility
+        # OpenPCDet expects 5 features by default for A9 dataset (with timestamp)
+        if points.shape[1] > 5:
+            points = points[:, :5]
+        elif points.shape[1] < 5:
+            # Pad with zeros if less than 5 features
+            padding = np.zeros((points.shape[0], 5 - points.shape[1]), dtype=np.float32)
+            points = np.hstack([points, padding])
+
         return points
 
     def get_label(self, idx):
