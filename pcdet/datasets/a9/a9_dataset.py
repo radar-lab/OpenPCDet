@@ -31,8 +31,17 @@ class A9Dataset(DatasetTemplate):
             root_path: Root path to the dataset
             logger: Logger instance
         """
+        # Use project root for relative paths
+        from ...config import cfg
+        data_path = dataset_cfg.DATA_PATH if root_path is None else root_path
+        if not str(data_path).startswith('/') and not str(data_path).startswith('C:') and ':' not in str(data_path):
+            # Relative path - resolve from project root
+            effective_root = cfg.PROJECT_ROOT / data_path
+        else:
+            effective_root = root_path
+
         super().__init__(
-            dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
+            dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=effective_root, logger=logger
         )
         self.split = self.dataset_cfg.DATA_SPLIT.get(self.mode, 'train')
 
