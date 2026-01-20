@@ -122,8 +122,8 @@ def bev_box_overlap(boxes, qboxes, criterion=-1):
 def d3_box_overlap_kernel(boxes, qboxes, rinc, criterion=-1):
     # ONLY support overlap in CAMERA, not lider.
     N, K = boxes.shape[0], qboxes.shape[0]
-    for i in range(N):
-        for j in range(K):
+    for i in numba.prange(N):
+        for j in numba.prange(K):
             if rinc[i, j] > 0:
                 # iw = (min(boxes[i, 1] + boxes[i, 4], qboxes[j, 1] +
                 #         qboxes[j, 4]) - max(boxes[i, 1], qboxes[j, 1]))

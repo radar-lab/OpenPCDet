@@ -226,6 +226,12 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
                     checkpoint_state(model, optimizer, trained_epoch, accumulated_iter), filename=ckpt_name,
                 )
 
+                # Also save as latest.pth for easy evaluation/resume
+                latest_ckpt_name = ckpt_save_dir / 'latest'
+                save_checkpoint(
+                    checkpoint_state(model, optimizer, trained_epoch, accumulated_iter), filename=latest_ckpt_name,
+                )
+
 
 def model_state_to_cpu(model_state):
     model_state_cpu = type(model_state)()  # ordered dict
