@@ -117,9 +117,25 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
                     )
                     
                     if show_gpu_stat and accumulated_iter % (3 * logger_iter_interval) == 0:
-                        # To show the GPU utilization, please install gpustat through "pip install gpustat"
-                        gpu_info = os.popen('gpustat').read()
-                        logger.info(gpu_info)
+                        # Show GPU utilization using gpustat
+                        try:
+                            import platform
+                            if platform.system() == 'Windows':
+                                # Windows: use subprocess with simple format to avoid encoding issues
+                                import subprocess
+                                result = subprocess.run(
+                                    ['gpustat', '--no-color', '--no-processes'],
+                                    capture_output=True, text=True, timeout=5
+                                )
+                                if result.returncode == 0:
+                                    gpu_info = result.stdout.strip()
+                                    logger.info(f'GPU: {gpu_info}')
+                            else:
+                                # Linux/macOS: use original popen method with full output
+                                gpu_info = os.popen('gpustat').read()
+                                logger.info(gpu_info)
+                        except Exception:
+                            pass  # Skip GPU stat if gpustat not available or fails
             else:                
                 pbar.update()
                 pbar.set_postfix(dict(total_it=accumulated_iter))

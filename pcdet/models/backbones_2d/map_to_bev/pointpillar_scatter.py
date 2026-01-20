@@ -13,6 +13,15 @@ class PointPillarScatter(nn.Module):
 
     def forward(self, batch_dict, **kwargs):
         pillar_features, coords = batch_dict['pillar_features'], batch_dict['voxel_coords']
+        
+        # Safety check: pillar_features must be 2D [N, C]
+        if pillar_features.dim() != 2:
+            raise RuntimeError(
+                f"pillar_features has wrong shape {pillar_features.shape}. "
+                f"Expected 2D tensor [N, C]. This usually indicates corrupted point cloud data. "
+                f"Please re-run data preprocessing with: pixi run python src/lidar3d/tools/prepare_data.py ..."
+            )
+        
         batch_spatial_features = []
         batch_size = coords[:, 0].max().int().item() + 1
         for batch_idx in range(batch_size):

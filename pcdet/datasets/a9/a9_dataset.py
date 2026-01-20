@@ -9,13 +9,11 @@ A9 is a roadside infrastructure LiDAR dataset with:
 
 import copy
 import pickle
-import os
 from pathlib import Path
 
 import numpy as np
 
-from ...ops.roiaware_pool3d import roiaware_pool3d_utils
-from ...utils import box_utils, common_utils
+from ...utils import box_utils
 from ..dataset import DatasetTemplate
 
 
@@ -74,47 +72,33 @@ class A9Dataset(DatasetTemplate):
     def get_lidar(self, idx):
         """Load point cloud data from binary file.
 
-        Handles variable point cloud formats by trying different reshape options.
-        Binary files are expected to be in KITTI format: (N, 4) with x, y, z, intensity.
-        For OpenPCDet with timestamp feature, we pad to 5 features (x, y, z, intensity, timestamp).
+        Binary files should be in (N, 5) format: x, y, z, intensity, timestamp.
+        - New preprocessing saves 5 features directly
+        - For backward compatibility with 4-feature files, we pad timestamp=0
         """
         lidar_file = Path(self.a9_infos[idx]['point_cloud_path'])
         if not lidar_file.is_absolute():
             lidar_file = self.root_path / lidar_file
 
-        with open(lidar_file, 'rb') as f:
-            points = np.fromfile(f, dtype=np.float32)
+        points = np.fromfile(lidar_file, dtype=np.float32)
+        total_values = points.size
 
-        # Try to reshape to common formats
-        total_points = points.size
-
-        # Try common formats (4 for KITTI, 5 for OpenPCDet with timestamp)
-        for num_features in [4, 5, 3, 6]:
-            if total_points % num_features == 0:
-                points = points.reshape(-1, num_features)
-                logger = getattr(self, 'logger', None)
-                if logger:
-                    logger.debug(f'Loaded point cloud with {total_points // num_features} points, {num_features} features')
-                break
-        else:
-            # If no standard format works, truncate to nearest divisible by 5
-            # and pad if needed to ensure at least 5 features
-            valid_points = (total_points // 5) * 5
-            points = points[:valid_points]
+        # Try 5 features first (new preprocessing format)
+        if total_values % 5 == 0:
             points = points.reshape(-1, 5)
+        # Fallback to 4 features (legacy KITTI format)
+        elif total_values % 4 == 0:
+            points = points.reshape(-1, 4)
+            # Pad timestamp=0 for roadside sensors
+            padding = np.zeros((points.shape[0], 1), dtype=np.float32)
+            points = np.hstack([points, padding])
+        else:
+            # Last resort: truncate to nearest multiple of 5
+            valid_count = (total_values // 5) * 5
             logger = getattr(self, 'logger', None)
             if logger:
-                logger.warning(f'Point cloud file has irregular size {total_points}. '
-                               f'Truncated to {valid_points} values and reshaped to (N, 5)')
-
-        # Ensure we have exactly 5 features (x, y, z, intensity, timestamp) for OpenPCDet compatibility
-        # OpenPCDet expects 5 features by default for A9 dataset (with timestamp)
-        if points.shape[1] > 5:
-            points = points[:, :5]
-        elif points.shape[1] < 5:
-            # Pad with zeros if less than 5 features
-            padding = np.zeros((points.shape[0], 5 - points.shape[1]), dtype=np.float32)
-            points = np.hstack([points, padding])
+                logger.warning(f'Irregular point cloud size {total_values}, truncating to {valid_count}')
+            points = points[:valid_count].reshape(-1, 5)
 
         return points
 
@@ -144,33 +128,165 @@ class A9Dataset(DatasetTemplate):
         box_utils.remove_points_in_boxes(points, gt_boxes)
         return points
 
-    def generate_prediction_dicts(self, batch_dict, pred_dicts):
-        """Convert prediction to standard format."""
-        pred_dicts = batch_dict['pred_dicts']
+    def generate_prediction_dicts(self, batch_dict, pred_dicts, class_names, output_path=None):
+        """
+        Convert prediction to standard format.
+        
+        Args:
+            batch_dict: dict containing frame_id and other batch info
+            pred_dicts: list of prediction dicts from model
+            class_names: list of class names
+            output_path: optional path to save results
+        
+        Returns:
+            list of annotation dicts
+        """
         annos = []
-
-        for i, pred_dict in enumerate(pred_dicts):
-            pred_boxes = pred_dict['pred_boxes']
-            pred_scores = pred_dict['pred_scores']
-            pred_labels = pred_dict['pred_labels']
-
+        
+        for idx, pred_dict in enumerate(pred_dicts):
+            frame_id = batch_dict['frame_id'][idx]
+            
+            pred_boxes = pred_dict['pred_boxes'].cpu().numpy()
+            pred_scores = pred_dict['pred_scores'].cpu().numpy()
+            pred_labels = pred_dict['pred_labels'].cpu().numpy()
+            
+            # Convert labels to class names
+            pred_names = np.array([class_names[l - 1] for l in pred_labels])
+            
             anno = {
-                'boxes_lidar': pred_boxes.cpu().numpy(),
-                'score': pred_scores.cpu().numpy(),
-                'label': pred_labels.cpu().numpy(),
+                'frame_id': frame_id,
+                'name': pred_names,
+                'boxes_lidar': pred_boxes,
+                'score': pred_scores,
+                'pred_labels': pred_labels,
             }
             annos.append(anno)
+            
+            # Optionally save to file
+            if output_path is not None:
+                import pickle
+                output_file = output_path / f'{frame_id}.pkl'
+                with open(output_file, 'wb') as f:
+                    pickle.dump(anno, f)
 
         return annos
 
     def evaluation(self, det_annos, class_names, **kwargs):
-        """Evaluate detection results (placeholder for custom metrics)."""
-        # For now, use basic KITTI-style evaluation
-        from ...utils import eval_utils
-        ap_result_str, ap_dict = eval_utils.get_coco_eval_result(
-            det_annos, class_names, current_classes=class_names
+        """
+        Evaluate detection results using KITTI-style evaluation.
+        
+        Tries numba CUDA-based KITTI evaluation first, falls back to simple
+        CPU-based statistics if numba CUDA is not available.
+        
+        Args:
+            det_annos: list of detection annotation dicts
+            class_names: list of class names
+            **kwargs: additional arguments (output_path, etc.)
+        
+        Returns:
+            tuple: (result_str, result_dict)
+        """
+        if 'annos' not in self.a9_infos[0].keys():
+            return 'No ground-truth boxes for evaluation', {}
+        
+        # Try KITTI-style evaluation with numba CUDA
+        try:
+            return self._kitti_evaluation(det_annos, class_names, **kwargs)
+        except Exception as e:
+            self.logger.warning(f'KITTI evaluation failed ({e}), using simple evaluation')
+            return self._simple_evaluation(det_annos, class_names, **kwargs)
+    
+    def _kitti_evaluation(self, det_annos, class_names, **kwargs):
+        """KITTI-style evaluation using numba CUDA for IoU calculation."""
+        from ..kitti.kitti_object_eval_python import eval as kitti_eval
+        from ..kitti import kitti_utils
+        
+        # Map A9 class names to KITTI format for evaluation
+        map_name_to_kitti = {
+            'car': 'Car',
+            'truck': 'Car',
+            'bus': 'Car',
+            'trailer': 'Car',
+            'motorcycle': 'Cyclist',
+            'bicycle': 'Cyclist',
+            'pedestrian': 'Pedestrian',
+        }
+        
+        eval_det_annos = copy.deepcopy(det_annos)
+        eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.a9_infos]
+        
+        # Transform annotations to KITTI format
+        kitti_utils.transform_annotations_to_kitti_format(
+            eval_det_annos, map_name_to_kitti=map_name_to_kitti
         )
+        kitti_utils.transform_annotations_to_kitti_format(
+            eval_gt_annos, map_name_to_kitti=map_name_to_kitti,
+            info_with_fakelidar=self.dataset_cfg.get('INFO_WITH_FAKELIDAR', False)
+        )
+        
+        # Get unique KITTI class names
+        kitti_class_names = list(set(map_name_to_kitti.get(x, x) for x in class_names))
+        kitti_class_names = [x for x in ['Car', 'Pedestrian', 'Cyclist'] if x in kitti_class_names]
+        
+        if not kitti_class_names:
+            return 'No valid classes for KITTI evaluation', {}
+        
+        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(
+            gt_annos=eval_gt_annos, dt_annos=eval_det_annos, current_classes=kitti_class_names
+        )
+        
         return ap_result_str, ap_dict
+    
+    def _simple_evaluation(self, det_annos, class_names, **kwargs):
+        """Simple CPU-based evaluation (fallback when numba CUDA unavailable)."""
+        total_gt = 0
+        total_det = 0
+        class_stats = {cls: {'gt': 0, 'det': 0} for cls in class_names}
+        
+        for idx, det_anno in enumerate(det_annos):
+            gt_anno = self.a9_infos[idx]['annos']
+            
+            # Count ground truth
+            gt_names = gt_anno.get('name', [])
+            if isinstance(gt_names, np.ndarray):
+                gt_names = gt_names.tolist()
+            for name in gt_names:
+                if name in class_stats:
+                    class_stats[name]['gt'] += 1
+                    total_gt += 1
+            
+            # Count detections
+            det_names = det_anno.get('name', [])
+            if isinstance(det_names, np.ndarray):
+                det_names = det_names.tolist()
+            for name in det_names:
+                if name in class_stats:
+                    class_stats[name]['det'] += 1
+                    total_det += 1
+        
+        # Build result string
+        result_lines = [
+            '=' * 60,
+            'A9 Evaluation Results (Simple Stats - Fallback Mode)',
+            '=' * 60,
+            f'Total GT objects: {total_gt}',
+            f'Total Detections: {total_det}',
+            '-' * 60,
+            'Per-class statistics:',
+        ]
+        
+        result_dict = {}
+        for cls in class_names:
+            gt_count = class_stats[cls]['gt']
+            det_count = class_stats[cls]['det']
+            result_lines.append(f'  {cls:15s}: GT={gt_count:5d}, Det={det_count:5d}')
+            result_dict[f'{cls}/gt_count'] = gt_count
+            result_dict[f'{cls}/det_count'] = det_count
+        
+        result_lines.append('=' * 60)
+        
+        result_str = '\n'.join(result_lines)
+        return result_str, result_dict
 
     def set_split(self, split):
         """Set the current data split."""
