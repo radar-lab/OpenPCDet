@@ -92,7 +92,10 @@ class TransFusionHead(nn.Module):
         self.loss_heatmap = loss_utils.GaussianFocalLoss()
         self.loss_heatmap_weight = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['hm_weight']
 
-        self.code_size = 10
+        # Determine code_size from code_weights (8 without velocity, 10 with velocity)
+        code_weights = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS.get('code_weights', [1.0] * 10)
+        self.code_size = len(code_weights)
+        self.pred_velocity = self.code_size == 10  # velocity requires 2 extra dimensions
 
         # a shared convolution
         self.shared_conv = nn.Conv2d(in_channels=input_channels,out_channels=hidden_channel,kernel_size=3,padding=1)
@@ -382,16 +385,16 @@ class TransFusionHead(nn.Module):
         return loss_all,loss_dict
 
     def encode_bbox(self, bboxes):
-        code_size = 10
-        targets = torch.zeros([bboxes.shape[0], code_size]).to(bboxes.device)
+        targets = torch.zeros([bboxes.shape[0], self.code_size]).to(bboxes.device)
         targets[:, 0] = (bboxes[:, 0] - self.point_cloud_range[0]) / (self.feature_map_stride * self.voxel_size[0])
         targets[:, 1] = (bboxes[:, 1] - self.point_cloud_range[1]) / (self.feature_map_stride * self.voxel_size[1])
         targets[:, 3:6] = bboxes[:, 3:6].log()
         targets[:, 2] = bboxes[:, 2]
         targets[:, 6] = torch.sin(bboxes[:, 6])
         targets[:, 7] = torch.cos(bboxes[:, 6])
-        if code_size == 10:
-            targets[:, 8:10] = bboxes[:, 7:]
+        # Only encode velocity if predicting it (code_size == 10)
+        if self.pred_velocity and bboxes.shape[1] > 7:
+            targets[:, 8:10] = bboxes[:, 7:9]
         return targets
 
     def decode_bbox(self, heatmap, rot, dim, center, height, vel, filter=False):
