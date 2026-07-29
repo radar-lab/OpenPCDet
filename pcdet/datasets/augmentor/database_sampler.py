@@ -19,6 +19,7 @@ import torch.distributed as dist
 
 from ...ops.iou3d_nms import iou3d_nms_utils
 from ...utils import box_utils, common_utils, calibration_kitti
+from ...utils.prepared_path_utils import resolve_prepared_data_path
 from pcdet.datasets.kitti.kitti_object_eval_python import kitti_common
 
 class DataBaseSampler(object):
@@ -399,7 +400,7 @@ class DataBaseSampler(object):
                 start_offset, end_offset = info['global_data_offset']
                 obj_points = copy.deepcopy(gt_database_data[start_offset:end_offset])
             else:
-                file_path = self.root_path / info['path']
+                file_path = resolve_prepared_data_path(self.root_path, info['path'])
 
                 obj_points = np.fromfile(str(file_path), dtype=np.float32).reshape(
                     [-1, self.sampler_cfg.NUM_POINT_FEATURES])
