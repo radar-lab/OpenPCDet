@@ -126,16 +126,13 @@ class TransFusionHead(nn.Module):
         self.forward_ret_dict = {}
 
     def create_2D_grid(self, x_size, y_size):
-        meshgrid = [[0, x_size - 1, x_size], [0, y_size - 1, y_size]]
-        # NOTE: modified
-        batch_x, batch_y = torch.meshgrid(
-            *[torch.linspace(it[0], it[1], it[2]) for it in meshgrid]
+        # Feature tensors flatten with x varying fastest inside each y row.
+        batch_y, batch_x = torch.meshgrid(
+            torch.arange(y_size, dtype=torch.float32) + 0.5,
+            torch.arange(x_size, dtype=torch.float32) + 0.5,
+            indexing="ij",
         )
-        batch_x = batch_x + 0.5
-        batch_y = batch_y + 0.5
-        coord_base = torch.cat([batch_x[None], batch_y[None]], dim=0)[None]
-        coord_base = coord_base.view(1, 2, -1).permute(0, 2, 1)
-        return coord_base
+        return torch.stack([batch_y, batch_x], dim=-1).view(1, -1, 2)
 
     def init_weights(self):
         # initialize transformer
