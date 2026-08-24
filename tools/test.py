@@ -41,6 +41,12 @@ def parse_config():
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
     parser.add_argument('--infer_time', action='store_true', default=False, help='calculate inference latency')
     parser.add_argument('--work_dir', type=str, default=None, help='custom work directory for outputs (overrides default output/ path)')
+    # Precision controls mirroring lidar3d's inference backends, so an AP
+    # measured here is comparable with a latency measured there.
+    parser.add_argument('--precision', type=str, default='fp32', choices=['fp32', 'bf16', 'fp16'],
+                        help='autocast dtype for the network; decode and NMS always stay fp32')
+    parser.add_argument('--channels_last', action='store_true', default=False,
+                        help='run rank-4 convolutions in NHWC')
 
     args = parser.parse_args()
 
@@ -61,6 +67,44 @@ def eval_single_ckpt(model, test_loader, args, eval_output_dir, logger, epoch_id
     model.load_params_from_file(filename=args.ckpt, logger=logger, to_cpu=dist_test, 
                                 pre_trained_path=args.pretrained_model)
     model.cuda()
+
+    # Same treatment the lidar3d inference backends apply. OpenPCDet decodes
+    # inside forward and post_processing calls rotated-IoU CUDA kernels
+    # compiled for float, so autocast cannot simply wrap the forward -- the
+    # decode entry point is wrapped in place to run fp32 on fp32 inputs.
+    if args.precision != 'fp32' or args.channels_last:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'src'))
+        from lidar3d.core.precision import (
+            apply_shared_runtime_flags,
+            autocast_for,
+            cast_floats_to_float32,
+            to_channels_last_where_supported,
+        )
+
+        _flags = apply_shared_runtime_flags()
+        _n = to_channels_last_where_supported(model) if args.channels_last else 0
+        logger.info(f'precision={args.precision} channels_last={args.channels_last} '
+                    f'({_n} conv layers) flags={_flags}')
+
+        if args.precision != 'fp32':
+            _forward = model.forward
+            _post = model.post_processing
+
+            def _fp32_post(batch_dict):
+                with torch.autocast(device_type='cuda', enabled=False):
+                    return _post(cast_floats_to_float32(batch_dict))
+
+            def _autocast_forward(batch_dict):
+                model.post_processing = _fp32_post
+                try:
+                    with autocast_for('cuda', args.precision):
+                        return _forward(batch_dict)
+                finally:
+                    model.post_processing = _post
+
+            model.forward = _autocast_forward
+
     
     # start evaluation
     eval_utils.eval_one_epoch(
