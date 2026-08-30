@@ -188,33 +188,86 @@ class A9Dataset(DatasetTemplate):
         """
         if 'annos' not in self.a9_infos[0].keys():
             return 'No ground-truth boxes for evaluation', {}
-        
-        # Try KITTI-style evaluation with numba CUDA
+
+        # The fallback exists for one thing: a host where numba cannot
+        # reach CUDA. It reports object counts and no AP, so catching
+        # everything with it turns any other bug into a run that looks
+        # finished and quietly has no metrics -- which is how a stale
+        # class map cost a full training wave its numbers. Fall back for
+        # the environmental case; let the rest surface.
         try:
             return self._kitti_evaluation(det_annos, class_names, **kwargs)
-        except Exception as e:
-            self.logger.warning(f'KITTI evaluation failed ({e}), using simple evaluation')
+        except (ImportError, RuntimeError, OSError) as e:
+            if 'cuda' not in str(e).lower() and 'numba' not in str(e).lower():
+                raise
+            self.logger.warning(f'KITTI evaluation unavailable ({e}), using simple evaluation')
             return self._simple_evaluation(det_annos, class_names, **kwargs)
     
+    @staticmethod
+    def _drop_unscored_classes(anno, map_name_to_kitti):
+        """Remove objects of classes the metric does not score.
+
+        A class that is trained but not reported (`train_only` in the
+        dataset spec) has no KITTI group, and the transform downstream
+        indexes the map rather than getting from it -- so leaving one in
+        raises KeyError on its name. Our own evaluator drops such
+        classes rather than scoring them, and dropping them here too is
+        what keeps the vendored numbers and ours measuring the same
+        thing.
+
+        Every field of the annotation is a parallel array, so they all
+        have to be filtered together.
+        """
+        names = anno.get('name')
+        if names is None:
+            return anno
+        names = np.asarray(names)
+        keep = np.array([str(name) in map_name_to_kitti for name in names], dtype=bool)
+        if keep.all():
+            return anno
+        count = len(names)
+        for key, value in list(anno.items()):
+            if isinstance(value, np.ndarray) and value.shape[:1] == (count,):
+                anno[key] = value[keep]
+            elif isinstance(value, list) and len(value) == count:
+                anno[key] = [item for item, taken in zip(value, keep) if taken]
+        return anno
+
     def _kitti_evaluation(self, det_annos, class_names, **kwargs):
         """KITTI-style evaluation using numba CUDA for IoU calculation."""
         from ..kitti.kitti_object_eval_python import eval as kitti_eval
         from ..kitti import kitti_utils
         
-        # Map A9 class names to KITTI format for evaluation
-        map_name_to_kitti = {
-            'car': 'Car',
-            'truck': 'Car',
-            'bus': 'Car',
-            'trailer': 'Car',
-            'motorcycle': 'Cyclist',
-            'bicycle': 'Cyclist',
-            'pedestrian': 'Pedestrian',
-        }
-        
-        eval_det_annos = copy.deepcopy(det_annos)
-        eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.a9_infos]
-        
+        # The mapping is the dataset spec's, not this file's. Hardcoding
+        # it here is exactly what broke: the roster gained `cyclist` and
+        # `motorcyclist`, this dict did not, and every DAIR-V2X-I and
+        # V2X-Real evaluation then raised KeyError('cyclist') -- which
+        # the caller swallowed, so twelve rows were on course to train to
+        # completion and report no AP at all. The emitted config now
+        # carries MAP_NAME_TO_KITTI; the literal below only serves
+        # configs written before it did.
+        map_name_to_kitti = self.dataset_cfg.get('MAP_NAME_TO_KITTI', None)
+        if map_name_to_kitti is None:
+            map_name_to_kitti = {
+                'car': 'Car',
+                'truck': 'Car',
+                'bus': 'Car',
+                'trailer': 'Car',
+                'motorcycle': 'Cyclist',
+                'bicycle': 'Cyclist',
+                'pedestrian': 'Pedestrian',
+            }
+        map_name_to_kitti = dict(map_name_to_kitti)
+
+        eval_det_annos = [
+            self._drop_unscored_classes(copy.deepcopy(anno), map_name_to_kitti)
+            for anno in det_annos
+        ]
+        eval_gt_annos = [
+            self._drop_unscored_classes(copy.deepcopy(info['annos']), map_name_to_kitti)
+            for info in self.a9_infos
+        ]
+
         # Transform annotations to KITTI format
         kitti_utils.transform_annotations_to_kitti_format(
             eval_det_annos, map_name_to_kitti=map_name_to_kitti
@@ -223,10 +276,10 @@ class A9Dataset(DatasetTemplate):
             eval_gt_annos, map_name_to_kitti=map_name_to_kitti,
             info_with_fakelidar=self.dataset_cfg.get('INFO_WITH_FAKELIDAR', False)
         )
-        
-        # Get unique KITTI class names
-        kitti_class_names = list(set(map_name_to_kitti.get(x, x) for x in class_names))
-        kitti_class_names = [x for x in ['Car', 'Pedestrian', 'Cyclist'] if x in kitti_class_names]
+
+        # Groups of the classes this dataset actually scores.
+        scored_groups = {map_name_to_kitti[x] for x in class_names if x in map_name_to_kitti}
+        kitti_class_names = [x for x in ['Car', 'Pedestrian', 'Cyclist'] if x in scored_groups]
         
         if not kitti_class_names:
             return 'No valid classes for KITTI evaluation', {}
