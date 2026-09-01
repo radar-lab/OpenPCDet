@@ -102,11 +102,38 @@ class A9Dataset(DatasetTemplate):
 
         return points
 
+    def _visible_mask(self, annos, count):
+        """Boxes this sensor actually saw, per MIN_POINTS_IN_GT.
+
+        A labelled box containing no points is an annotation the sensor
+        could not see rather than an object a detector could find. On A9
+        that is 10% of every split, because labels are scene-level across
+        the paired north/south lidars while a frame carries one sensor's
+        points. Left in, they are unlearnable supervision in training and
+        guaranteed misses in evaluation.
+
+        The same threshold and the same boxes must be dropped in both
+        places, or training and scoring disagree about what exists.
+        """
+        floor = int(self.dataset_cfg.get('MIN_POINTS_IN_GT', 0) or 0)
+        counts = annos.get('num_points_in_gt') if isinstance(annos, dict) else None
+        if floor <= 0 or counts is None:
+            return None
+        counts = np.asarray(counts)
+        if counts.shape[0] != count:
+            return None
+        mask = counts >= floor
+        return None if mask.all() else mask
+
     def get_label(self, idx):
         """Load label data (boxes and names) from info dict."""
         annos = self.a9_infos[idx]['annos']
         gt_boxes = annos.get('gt_boxes_lidar', np.zeros((0, 9), dtype=np.float32))
         gt_names = annos.get('name', [])
+        mask = self._visible_mask(annos, len(gt_boxes))
+        if mask is not None:
+            gt_boxes = np.asarray(gt_boxes)[mask]
+            gt_names = np.asarray(gt_names)[mask]
         return gt_boxes, gt_names
 
     def get_annos(self, idx):
@@ -263,10 +290,18 @@ class A9Dataset(DatasetTemplate):
             self._drop_unscored_classes(copy.deepcopy(anno), map_name_to_kitti)
             for anno in det_annos
         ]
-        eval_gt_annos = [
-            self._drop_unscored_classes(copy.deepcopy(info['annos']), map_name_to_kitti)
-            for info in self.a9_infos
-        ]
+        eval_gt_annos = []
+        for info in self.a9_infos:
+            annos = copy.deepcopy(info['annos'])
+            mask = self._visible_mask(annos, len(annos.get('name', [])))
+            if mask is not None:
+                count = len(mask)
+                for key, value in list(annos.items()):
+                    if isinstance(value, np.ndarray) and value.shape[:1] == (count,):
+                        annos[key] = value[mask]
+                    elif isinstance(value, list) and len(value) == count:
+                        annos[key] = [v for v, keep in zip(value, mask) if keep]
+            eval_gt_annos.append(self._drop_unscored_classes(annos, map_name_to_kitti))
 
         # Transform annotations to KITTI format
         kitti_utils.transform_annotations_to_kitti_format(
